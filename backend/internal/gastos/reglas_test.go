@@ -93,3 +93,33 @@ func TestValidarFecha(t *testing.T) {
 		})
 	}
 }
+
+func TestValidarPresupuesto(t *testing.T) {
+	casos := []struct {
+		nombre      string
+		totalDelMes float64
+		monto       float64
+		presupuesto float64
+		tiene       bool
+		quiereErr   error
+	}{
+		{"sin presupuesto definido, cualquier monto", 0, 999999, 0, false, nil},
+		{"dentro del presupuesto", 1000, 500, 2000, true, nil},
+		{"justo en el tope (se permite)", 1500, 500, 2000, true, nil},
+		{"se pasa por un centavo", 1500, 500.01, 2000, true, ErrPresupuestoExcedido},
+		{"ya estaba al tope y suma algo", 2000, 1, 2000, true, ErrPresupuestoExcedido},
+		{"un solo gasto mas grande que el tope", 0, 5000, 2000, true, ErrPresupuestoExcedido},
+	}
+
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			// Act
+			err := ValidarPresupuesto(c.totalDelMes, c.monto, c.presupuesto, c.tiene)
+
+			// Assert
+			if !errors.Is(err, c.quiereErr) {
+				t.Fatalf("quise %v y obtuve %v", c.quiereErr, err)
+			}
+		})
+	}
+}

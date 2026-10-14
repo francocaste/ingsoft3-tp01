@@ -45,3 +45,15 @@ func ValidarFecha(fecha, ahora time.Time) error {
 	}
 	return nil
 }
+
+var ErrPresupuestoExcedido = errors.New("el gasto excede el presupuesto mensual de la categoria")
+
+func ValidarPresupuesto(totalDelMes, monto, presupuesto float64, tienePresupuesto bool) error {
+	if !tienePresupuesto {
+		return nil
+	}
+	if totalDelMes+monto > presupuesto {
+		return ErrPresupuestoExcedido
+	}
+	return nil
+}
