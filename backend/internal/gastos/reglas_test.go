@@ -3,34 +3,93 @@ package gastos
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
-func TestValidarCampos_TodoCompleto_NoDevuelveError(t *testing.T) {
-	// Arrange: preparo los datos de un gasto bien cargado
-	descripcion := "Almuerzo"
-	categoria := "Comida"
-	monto := 1500.0
+func TestValidarCampos(t *testing.T) {
+	// Arrange: la tabla. Cada fila es un caso: datos de entrada + resultado esperado.
+	casos := []struct {
+		nombre      string
+		descripcion string
+		categoria   string
+		monto       float64
+		quiereErr   error
+	}{
+		{"todo completo", "Almuerzo", "Comida", 1500, nil},
+		{"monto minimo valido", "Chicle", "Otros", 0.01, nil},
+		{"sin descripcion", "", "Comida", 1500, ErrCamposObligatorios},
+		{"sin categoria", "Almuerzo", "", 1500, ErrCamposObligatorios},
+		{"monto cero", "Almuerzo", "Comida", 0, ErrCamposObligatorios},
+		{"monto negativo", "Almuerzo", "Comida", -50, ErrCamposObligatorios},
+	}
 
-	// Act: ejecuto la regla
-	err := ValidarCampos(descripcion, categoria, monto)
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			// Act
+			err := ValidarCampos(c.descripcion, c.categoria, c.monto)
 
-	// Assert: espero que NO haya error
-	if err != nil {
-		t.Fatalf("no esperaba error y obtuve: %v", err)
+			// Assert
+			if !errors.Is(err, c.quiereErr) {
+				t.Fatalf("quise %v y obtuve %v", c.quiereErr, err)
+			}
+		})
+	}
+}
+func TestValidarCategoria(t *testing.T) {
+	// Arrange: la tabla de casos
+	casos := []struct {
+		categoria string
+		quiereErr error
+	}{
+		{"Comida", nil},
+		{"Transporte", nil},
+		{"Ocio", nil},
+		{"Servicios", nil},
+		{"Salud", nil},
+		{"Otros", nil},
+		{"Inventada", ErrCategoriaInvalida},
+		{"", ErrCategoriaInvalida},
+		{"comida", ErrCategoriaInvalida}, // distingue mayusculas
+	}
+
+	for _, c := range casos {
+		t.Run("categoria="+c.categoria, func(t *testing.T) {
+			// Act
+			err := ValidarCategoria(c.categoria)
+
+			// Assert
+			if !errors.Is(err, c.quiereErr) {
+				t.Fatalf("quise %v y obtuve %v", c.quiereErr, err)
+			}
+		})
 	}
 }
 
-func TestValidarCampos_MontoCero_DevuelveError(t *testing.T) {
-	// Arrange
-	descripcion := "Almuerzo"
-	categoria := "Comida"
-	monto := 0.0
+func TestValidarFecha(t *testing.T) {
+	// Arrange: "ahora" fijo, así el test da lo mismo hoy que en un año
+	ahora := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 
-	// Act
-	err := ValidarCampos(descripcion, categoria, monto)
+	casos := []struct {
+		nombre    string
+		fecha     time.Time
+		quiereErr error
+	}{
+		{"hoy mismo", ahora, nil},
+		{"hoy a ultima hora (misma fecha)", time.Date(2026, 10, 9, 23, 59, 0, 0, time.UTC), nil},
+		{"ayer", ahora.AddDate(0, 0, -1), nil},
+		{"manana", ahora.AddDate(0, 0, 1), ErrFechaFutura},
+		{"el anio que viene", ahora.AddDate(1, 0, 0), ErrFechaFutura},
+	}
 
-	// Assert: espero justamente ErrCamposObligatorios
-	if !errors.Is(err, ErrCamposObligatorios) {
-		t.Fatalf("esperaba ErrCamposObligatorios y obtuve: %v", err)
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			// Act
+			err := ValidarFecha(c.fecha, ahora)
+
+			// Assert
+			if !errors.Is(err, c.quiereErr) {
+				t.Fatalf("quise %v y obtuve %v", c.quiereErr, err)
+			}
+		})
 	}
 }
