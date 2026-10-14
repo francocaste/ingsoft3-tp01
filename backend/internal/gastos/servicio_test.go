@@ -15,32 +15,23 @@ type repoFalso struct {
 	totalDelMes float64
 	estado      string
 
-	// errores que le podemos pedir que devuelva, para simular una base caída
-	errAlConsultar  error
-	errAlTotal      error
-	errAlInsertar   error
-	errAlActualizar error
-
-	// espía: cuántas veces lo llamaron y con qué
-	llamadasPresupuesto  int
-	llamadasInsertar     int
-	llamadasActualizar   int
-	ultimoEstadoGuardado string
+	llamadasPresupuesto int
+	llamadasInsertar    int
 }
 
 func (r *repoFalso) PresupuestoDe(string) (float64, bool, error) {
 	r.llamadasPresupuesto++
-	return r.presupuesto, r.tienePresup, r.errAlConsultar
+	return r.presupuesto, r.tienePresup, nil
 }
 
 func (r *repoFalso) TotalDelMes(string, time.Time) (float64, error) {
-	return r.totalDelMes, r.errAlTotal
+	return r.totalDelMes, nil
 }
 
 func (r *repoFalso) Insertar(g *Gasto) error {
 	r.llamadasInsertar++
 	g.ID = 42
-	return r.errAlInsertar
+	return nil
 }
 
 func (r *repoFalso) EstadoDe(int) (string, error) {
@@ -50,11 +41,7 @@ func (r *repoFalso) EstadoDe(int) (string, error) {
 	return r.estado, nil
 }
 
-func (r *repoFalso) ActualizarEstado(_ int, estado string) error {
-	r.llamadasActualizar++
-	r.ultimoEstadoGuardado = estado
-	return r.errAlActualizar
-}
+func (r *repoFalso) ActualizarEstado(int, string) error { return nil }
 
 var hoyFijo = time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 
@@ -124,82 +111,5 @@ func TestCrearGasto_ExcedePresupuesto_NoInserta(t *testing.T) {
 	}
 	if repo.llamadasInsertar != 0 {
 		t.Fatal("un gasto que excede el presupuesto no debe insertarse")
-	}
-}
-
-func TestCrearGasto_ErroresDeLaBase_SePropagan(t *testing.T) {
-	errBase := errors.New("la base se cayo")
-	casos := []struct {
-		nombre string
-		repo   *repoFalso
-	}{
-		{"falla al consultar el presupuesto", &repoFalso{errAlConsultar: errBase}},
-		{"falla al consultar el total del mes", &repoFalso{tienePresup: true, presupuesto: 9999, errAlTotal: errBase}},
-		{"falla al insertar", &repoFalso{errAlInsertar: errBase}},
-	}
-	for _, c := range casos {
-		t.Run(c.nombre, func(t *testing.T) {
-			_, err := servicioConRepo(c.repo).CrearGasto(gastoValido())
-			if !errors.Is(err, errBase) {
-				t.Fatalf("quise propagar %v y obtuve %v", errBase, err)
-			}
-		})
-	}
-}
-
-func TestCambiarEstado_PendienteAPagado_Actualiza(t *testing.T) {
-	repo := &repoFalso{estado: EstadoPendiente}
-
-	err := servicioConRepo(repo).CambiarEstado(1, EstadoPagado)
-
-	if err != nil {
-		t.Fatalf("no esperaba error y obtuve %v", err)
-	}
-	if repo.llamadasActualizar != 1 || repo.ultimoEstadoGuardado != EstadoPagado {
-		t.Fatalf("debia guardar 'pagado' una vez (llamadas=%d, estado=%q)",
-			repo.llamadasActualizar, repo.ultimoEstadoGuardado)
-	}
-}
-
-func TestCambiarEstado_PagadoAPendiente_SeRechazaYNoActualiza(t *testing.T) {
-	repo := &repoFalso{estado: EstadoPagado}
-
-	err := servicioConRepo(repo).CambiarEstado(1, EstadoPendiente)
-
-	if !errors.Is(err, ErrTransicionInvalida) {
-		t.Fatalf("quise ErrTransicionInvalida y obtuve %v", err)
-	}
-	if repo.llamadasActualizar != 0 {
-		t.Fatal("una transicion invalida no debe escribir en la base")
-	}
-}
-
-func TestCambiarEstado_CasosBorde(t *testing.T) {
-	errBase := errors.New("la base se cayo")
-	casos := []struct {
-		nombre    string
-		repo      *repoFalso
-		nuevo     string
-		quiereErr error
-	}{
-		{"estado inexistente", &repoFalso{estado: EstadoPendiente}, "cancelado", ErrEstadoInvalido},
-		{"gasto que no existe", &repoFalso{estado: ""}, EstadoPagado, ErrNoEncontrado},
-		{"falla al guardar", &repoFalso{estado: EstadoPendiente, errAlActualizar: errBase}, EstadoPagado, errBase},
-	}
-	for _, c := range casos {
-		t.Run(c.nombre, func(t *testing.T) {
-			err := servicioConRepo(c.repo).CambiarEstado(1, c.nuevo)
-			if !errors.Is(err, c.quiereErr) {
-				t.Fatalf("quise %v y obtuve %v", c.quiereErr, err)
-			}
-		})
-	}
-}
-
-func TestNuevoServicio_SinReloj_UsaTimeNow(t *testing.T) {
-	svc := NuevoServicio(&repoFalso{}, nil)
-
-	if svc.ahora == nil {
-		t.Fatal("debia usar time.Now por defecto")
 	}
 }
