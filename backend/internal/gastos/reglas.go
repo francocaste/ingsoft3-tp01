@@ -57,3 +57,23 @@ func ValidarPresupuesto(totalDelMes, monto, presupuesto float64, tienePresupuest
 	}
 	return nil
 }
+
+const (
+	EstadoPendiente = "pendiente"
+	EstadoPagado    = "pagado"
+)
+
+var (
+	ErrEstadoInvalido     = errors.New("estado invalido: debe ser 'pendiente' o 'pagado'")
+	ErrTransicionInvalida = errors.New("un gasto pagado no puede volver a pendiente")
+)
+
+func ValidarTransicion(actual, nuevo string) error {
+	if nuevo != EstadoPendiente && nuevo != EstadoPagado {
+		return ErrEstadoInvalido
+	}
+	if actual == EstadoPagado && nuevo == EstadoPendiente {
+		return ErrTransicionInvalida
+	}
+	return nil
+}
