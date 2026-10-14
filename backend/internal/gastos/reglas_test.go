@@ -148,3 +148,25 @@ func TestValidarTransicion(t *testing.T) {
 		})
 	}
 }
+
+func TestPorcentajeUsado(t *testing.T) {
+	casos := []struct {
+		nombre             string
+		total, presupuesto float64
+		quiere             float64
+	}{
+		{"mitad", 500, 1000, 50},
+		{"completo", 1000, 1000, 100},
+		{"excedido", 1500, 1000, 150},
+		{"nada gastado", 0, 1000, 0},
+		{"presupuesto cero no divide por cero", 100, 0, 0},
+	}
+
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			if got := PorcentajeUsado(c.total, c.presupuesto); got != c.quiere {
+				t.Fatalf("quise %v y obtuve %v", c.quiere, got)
+			}
+		})
+	}
+}
