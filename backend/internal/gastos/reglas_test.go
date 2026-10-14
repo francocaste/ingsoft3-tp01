@@ -123,3 +123,28 @@ func TestValidarPresupuesto(t *testing.T) {
 		})
 	}
 }
+func TestValidarTransicion(t *testing.T) {
+	casos := []struct {
+		actual, nuevo string
+		quiereErr     error
+	}{
+		{EstadoPendiente, EstadoPagado, nil},
+		{EstadoPendiente, EstadoPendiente, nil},
+		{EstadoPagado, EstadoPagado, nil},
+		{EstadoPagado, EstadoPendiente, ErrTransicionInvalida},
+		{EstadoPendiente, "cancelado", ErrEstadoInvalido},
+		{EstadoPagado, "", ErrEstadoInvalido},
+	}
+
+	for _, c := range casos {
+		t.Run(c.actual+"->"+c.nuevo, func(t *testing.T) {
+			// Act
+			err := ValidarTransicion(c.actual, c.nuevo)
+
+			// Assert
+			if !errors.Is(err, c.quiereErr) {
+				t.Fatalf("quise %v y obtuve %v", c.quiereErr, err)
+			}
+		})
+	}
+}
