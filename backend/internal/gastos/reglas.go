@@ -77,3 +77,12 @@ func ValidarTransicion(actual, nuevo string) error {
 	}
 	return nil
 }
+
+// PorcentajeUsado devuelve cuanto del presupuesto se uso (0 a 100+).
+// Con presupuesto 0 devuelve 0 para no dividir por cero.
+func PorcentajeUsado(total, presupuesto float64) float64 {
+	if presupuesto <= 0 {
+		return 0
+	}
+	return (total / presupuesto) * 100
+}
