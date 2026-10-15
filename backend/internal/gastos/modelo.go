@@ -15,4 +15,18 @@ type Gasto struct {
 	Estado      string    `json:"estado"`
 }
 
+// Presupuesto es el tope mensual definido para una categoria.
+type Presupuesto struct {
+	Categoria    string  `json:"categoria"`
+	MontoMensual float64 `json:"monto_mensual"`
+}
+
+// ResumenCategoria es el total gastado en una categoria, con su presupuesto si tiene.
+type ResumenCategoria struct {
+	Categoria          string   `json:"categoria"`
+	Total              float64  `json:"total"`
+	PresupuestoMensual *float64 `json:"presupuesto_mensual,omitempty"`
+	PorcentajeUsado    *float64 `json:"porcentaje_usado,omitempty"`
+}
+
 var ErrNoEncontrado = errors.New("no existe ese gasto")

@@ -3,56 +3,22 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"time"
 
+	"gastos-backend/internal/gastos"
+
 	_ "github.com/lib/pq"
 )
 
-// Gasto representa un gasto personal cargado por el usuario.
-type Gasto struct {
-	ID          int       `json:"id"`
-	Descripcion string    `json:"descripcion"`
-	Monto       float64   `json:"monto"`
-	Categoria   string    `json:"categoria"`
-	Fecha       time.Time `json:"fecha"`
-	Estado      string    `json:"estado"`
-}
-
-// Presupuesto es el tope mensual definido para una categoria.
-type Presupuesto struct {
-	Categoria    string  `json:"categoria"`
-	MontoMensual float64 `json:"monto_mensual"`
-}
-
-// ResumenCategoria es el total gastado en una categoria, con su presupuesto si tiene.
-type ResumenCategoria struct {
-	Categoria          string   `json:"categoria"`
-	Total              float64  `json:"total"`
-	PresupuestoMensual *float64 `json:"presupuesto_mensual,omitempty"`
-	PorcentajeUsado    *float64 `json:"porcentaje_usado,omitempty"`
-}
-
-// CategoriasValidas es la lista cerrada de categorias aceptadas. Se valida
-// en el servidor, no solo en el combo del frontend.
-var CategoriasValidas = map[string]bool{
-	"Comida":     true,
-	"Transporte": true,
-	"Ocio":       true,
-	"Servicios":  true,
-	"Salud":      true,
-	"Otros":      true,
-}
-
-const (
-	EstadoPendiente = "pendiente"
-	EstadoPagado    = "pagado"
+var (
+	db       *sql.DB
+	servicio *gastos.Servicio
 )
-
-var db *sql.DB
 
 func main() {
 	dsn := os.Getenv("DATABASE_URL")
@@ -74,6 +40,8 @@ func main() {
 	if err := migrate(db); err != nil {
 		log.Fatalf("no se pudo crear el schema: %v", err)
 	}
+
+	servicio = gastos.NuevoServicio(&repoSQL{db: db}, time.Now)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", healthHandler)
@@ -151,85 +119,38 @@ func listGastosHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	gastos := []Gasto{}
+	lista := []gastos.Gasto{}
 	for rows.Next() {
-		var g Gasto
+		var g gastos.Gasto
 		if err := rows.Scan(&g.ID, &g.Descripcion, &g.Monto, &g.Categoria, &g.Fecha, &g.Estado); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		gastos = append(gastos, g)
+		lista = append(lista, g)
 	}
 	if err := rows.Err(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, gastos)
+	writeJSON(w, lista)
 }
 
 func createGastoHandler(w http.ResponseWriter, r *http.Request) {
-	var g Gasto
+	var g gastos.Gasto
 	if err := json.NewDecoder(r.Body).Decode(&g); err != nil {
 		http.Error(w, "body invalido", http.StatusBadRequest)
 		return
 	}
 
-	// Regla 1: campos obligatorios y monto positivo.
-	if g.Descripcion == "" || g.Categoria == "" || g.Monto <= 0 {
-		http.Error(w, "descripcion, categoria y monto (mayor a 0) son obligatorios", http.StatusBadRequest)
-		return
-	}
-
-	// Regla 2: la categoria tiene que ser una de las validas (no lo que
-	// mande el cliente, aunque el combo del front ya la restrinja).
-	if !CategoriasValidas[g.Categoria] {
-		http.Error(w, "categoria invalida", http.StatusBadRequest)
-		return
-	}
-
-	if g.Fecha.IsZero() {
-		g.Fecha = time.Now()
-	}
-
-	// Regla 3: no se aceptan gastos con fecha futura.
-	hoy := truncarADia(time.Now())
-	if truncarADia(g.Fecha).After(hoy) {
-		http.Error(w, "la fecha del gasto no puede ser futura", http.StatusBadRequest)
-		return
-	}
-
-	g.Estado = EstadoPendiente
-
-	// Regla 4: si la categoria tiene presupuesto mensual definido, un
-	// gasto que lo supere se bloquea. Sin presupuesto definido, no hay
-	// restriccion (se permite cualquier monto).
-	presupuesto, tienePresupuesto, err := presupuestoDeCategoria(g.Categoria)
+	// Las reglas 1 a 4 viven en gastos.Servicio; el handler solo traduce
+	// el error de dominio a un status HTTP.
+	creado, err := servicio.CrearGasto(g)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if tienePresupuesto {
-		totalDelMes, err := totalGastadoEnElMes(g.Categoria, g.Fecha)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if totalDelMes+g.Monto > presupuesto {
-			http.Error(w, "el gasto excede el presupuesto mensual de la categoria", http.StatusUnprocessableEntity)
-			return
-		}
-	}
-
-	err = db.QueryRow(
-		`INSERT INTO gastos (descripcion, monto, categoria, fecha, estado) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-		g.Descripcion, g.Monto, g.Categoria, g.Fecha, g.Estado,
-	).Scan(&g.ID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), statusDe(err))
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, g)
+	writeJSON(w, creado)
 }
 
 func deleteGastoHandler(w http.ResponseWriter, r *http.Request) {
@@ -252,8 +173,7 @@ func deleteGastoHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Regla 5: transicion de estado. Un gasto pendiente puede pasar a pagado,
-// pero un gasto pagado no puede volver a pendiente.
+// La regla 5 (transicion de estado) vive en gastos.Servicio.CambiarEstado.
 func updateEstadoHandler(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	id, err := strconv.Atoi(idStr)
@@ -269,28 +189,9 @@ func updateEstadoHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "body invalido", http.StatusBadRequest)
 		return
 	}
-	if body.Estado != EstadoPendiente && body.Estado != EstadoPagado {
-		http.Error(w, "estado invalido: debe ser 'pendiente' o 'pagado'", http.StatusBadRequest)
-		return
-	}
 
-	var estadoActual string
-	if err := db.QueryRow(`SELECT estado FROM gastos WHERE id = $1`, id).Scan(&estadoActual); err != nil {
-		if err == sql.ErrNoRows {
-			http.Error(w, "no existe ese gasto", http.StatusNotFound)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	if estadoActual == EstadoPagado && body.Estado == EstadoPendiente {
-		http.Error(w, "un gasto pagado no puede volver a pendiente", http.StatusConflict)
-		return
-	}
-
-	if _, err := db.Exec(`UPDATE gastos SET estado = $1 WHERE id = $2`, body.Estado, id); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if err := servicio.CambiarEstado(id, body.Estado); err != nil {
+		http.Error(w, err.Error(), statusDe(err))
 		return
 	}
 	writeJSON(w, map[string]string{"id": idStr, "estado": body.Estado})
@@ -304,9 +205,9 @@ func resumenHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	resumen := []ResumenCategoria{}
+	resumen := []gastos.ResumenCategoria{}
 	for rows.Next() {
-		var rc ResumenCategoria
+		var rc gastos.ResumenCategoria
 		if err := rows.Scan(&rc.Categoria, &rc.Total); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -319,7 +220,7 @@ func resumenHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		if tiene {
 			rc.PresupuestoMensual = &presupuesto
-			porcentaje := (rc.Total / presupuesto) * 100
+			porcentaje := gastos.PorcentajeUsado(rc.Total, presupuesto)
 			rc.PorcentajeUsado = &porcentaje
 		}
 
@@ -340,9 +241,9 @@ func listPresupuestosHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	presupuestos := []Presupuesto{}
+	presupuestos := []gastos.Presupuesto{}
 	for rows.Next() {
-		var p Presupuesto
+		var p gastos.Presupuesto
 		if err := rows.Scan(&p.Categoria, &p.MontoMensual); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -357,12 +258,12 @@ func listPresupuestosHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func upsertPresupuestoHandler(w http.ResponseWriter, r *http.Request) {
-	var p Presupuesto
+	var p gastos.Presupuesto
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 		http.Error(w, "body invalido", http.StatusBadRequest)
 		return
 	}
-	if !CategoriasValidas[p.Categoria] {
+	if !gastos.CategoriasValidas[p.Categoria] {
 		http.Error(w, "categoria invalida", http.StatusBadRequest)
 		return
 	}
@@ -395,27 +296,27 @@ func presupuestoDeCategoria(categoria string) (monto float64, tiene bool, err er
 	return monto, true, nil
 }
 
-func totalGastadoEnElMes(categoria string, fecha time.Time) (float64, error) {
-	var total sql.NullFloat64
-	err := db.QueryRow(`
-		SELECT SUM(monto) FROM gastos
-		WHERE categoria = $1
-		  AND date_trunc('month', fecha) = date_trunc('month', $2::date)
-	`, categoria, fecha).Scan(&total)
-	if err != nil {
-		return 0, err
-	}
-	if !total.Valid {
-		return 0, nil
-	}
-	return total.Float64, nil
-}
-
-func truncarADia(t time.Time) time.Time {
-	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
-}
-
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
+}
+
+// statusDe traduce un error de dominio al status HTTP que corresponde.
+// Cualquier error que no sea de dominio (ej: la base caida) es un 500.
+func statusDe(err error) int {
+	switch {
+	case errors.Is(err, gastos.ErrCamposObligatorios),
+		errors.Is(err, gastos.ErrCategoriaInvalida),
+		errors.Is(err, gastos.ErrFechaFutura),
+		errors.Is(err, gastos.ErrEstadoInvalido):
+		return http.StatusBadRequest
+	case errors.Is(err, gastos.ErrPresupuestoExcedido):
+		return http.StatusUnprocessableEntity
+	case errors.Is(err, gastos.ErrTransicionInvalida):
+		return http.StatusConflict
+	case errors.Is(err, gastos.ErrNoEncontrado):
+		return http.StatusNotFound
+	default:
+		return http.StatusInternalServerError
+	}
 }
