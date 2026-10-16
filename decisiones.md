@@ -238,3 +238,200 @@ antes de subirlo al pipeline. Entiendo la diferencia entre `push` y `pull_reques
 triggers, por qué el cache necesita `scope` separado por job, y por qué el pipeline usa el
 Dockerfile en vez de compilar por su cuenta — puedo explicar cada uno de estos puntos en la
 defensa oral sin depender del texto generado.
+
+
+## TP5 — Testing en el pipeline
+
+### 1. Qué tests elegí y por qué
+
+Probé las **5 reglas de negocio** de la app más el cálculo del porcentaje de presupuesto, porque
+son lo que más confianza cuesta si se rompe: monto positivo y campos obligatorios, categoría
+válida, fecha no futura, tope del presupuesto mensual y transición de estado (`pagado` no vuelve
+a `pendiente`). Tests de backend: 17 funciones de test en `backend/internal/gastos` (más sus
+subtests). Tests de frontend: 23 casos en `frontend/src/lib/gastos.test.js`.
+
+- **Parametrizados** (tabla en Go, `it.each` en vitest): una misma lógica con muchos datos. Los
+  usé sobre todo para los **bordes**: gastar *exactamente* el tope del presupuesto se permite y
+  pasarse por un centavo no; un gasto de "hoy a última hora" es válido y uno de mañana no.
+- **Caso de error**: que el repositorio falle (base caída) y el servicio propague el error en
+  vez de tragárselo; en el frontend, que `fetch` rechace y el error se propague.
+- **Con doble (mock)**: ver sección 6.
+
+No probé `App.jsx` (render) ni los handlers HTTP ni el SQL: son tests de otra capa de la
+pirámide (componentes / integración) y los dejo fuera a propósito (ver sección 3).
+
+### 2. Umbral de cobertura: número, métrica y por qué
+
+| | Métrica | Umbral | Valor actual |
+|---|---|---|---|
+| Backend (Go) | sentencias (statements) | **90 %** | 100 % |
+| Frontend (vitest + v8) | líneas **y** ramas | **90 % / 90 %** | 100 % / 100 % |
+
+Go sólo mide cobertura de **sentencias** (no tiene cobertura de ramas), por eso ahí uso esa
+métrica; en el frontend uso líneas y ramas porque vitest reporta las dos.
+
+Elegí **90 %** y no otro número por tres razones: (1) el alcance medido es sólo la lógica pura,
+donde 100 % es alcanzable, así que 90 % deja margen para una rama defensiva sin test sin frenar
+un PR por una sola línea; (2) es lo bastante alto como para que código nuevo sin tests **sí**
+frene: lo comprobé (sección 5); (3) con 60 % u 80 % una función nueva de unas diez sentencias
+pasaría sin que nadie la pruebe. No puse 100 % porque empuja a escribir tests sólo para tocar
+líneas (ley de Goodhart: cuando la métrica se vuelve la meta, deja de medir lo que importaba) y
+a frenar por código inalcanzable.
+
+El umbral está en el repo, no en una configuración externa: `COVERAGE_MIN` en
+`backend/scripts/test.sh` y `coverage.thresholds` en `frontend/vite.config.js`. Cambiarlo
+requiere un PR, que pasa por revisión y por el mismo gate.
+
+### 3. Qué excluí de la cobertura y por qué
+
+Mido **sólo** `backend/internal/...` y `frontend/src/lib/**`. Quedan afuera:
+
+- `backend/main.go` (arranque, rutas, CORS, `migrate`, `waitForDB`) y los handlers HTTP: es
+  código de arranque y "pegamento" que necesita una base real o un servidor levantado.
+- `backend/repo_sql.go`: es SQL; probarlo de verdad requiere Postgres (test de integración).
+- `frontend/src/main.jsx` y `frontend/src/App.jsx`: arranque de React y render; se prueban con
+  tests de componentes o E2E, no unitarios.
+
+Para que la exclusión no sea trampa, **moví la lógica fuera de esos archivos** (a
+`internal/gastos` y `src/lib`) y dejé en ellos sólo código de pegamento. Excluir un archivo con
+reglas de negocio adentro sería esconder lo que sí importa.
+
+### 4. Cómo corre en el pipeline
+
+- Los tests corren **dentro de los jobs que ya existían** (`build-backend` y `build-frontend`),
+  sin jobs nuevos: así los nombres de los checks obligatorios de `main` no cambian y la
+  protección de rama sigue funcionando.
+- Cada Dockerfile tiene una etapa `test` (`FROM build AS test` + `ENTRYPOINT`). El pipeline la
+  construye con `target: test` y `load: true` (para poder hacer `docker run`), y la ejecuta. Si
+  falla un test o la cobertura queda por debajo del umbral, el contenedor sale con código 1 y el
+  job queda en rojo. La etapa final (nginx / alpine) no la incluye.
+- Los reportes se publican con `if: ${{ !cancelled() }}`: aunque los tests fallen, el resumen
+  (`$GITHUB_STEP_SUMMARY`) y el artefacto (`cobertura-backend`, `cobertura-frontend`) se suben,
+  que es cuando más sirven. Si los tests fallan, la imagen final ni se construye.
+- Para el frontend, el pipeline lee `coverage-summary.json` con `jq` y **falla si
+  `total.lines.total` es 0**: sin esa guarda, un `include` mal escrito mediría 0 de 0 líneas y
+  el umbral pasaría sin haber medido nada.
+- Backend: la cobertura la calcula `scripts/test.sh` (`go test -coverprofile`), que además genera
+  `coverage.html` y `cobertura-por-funcion.txt`.
+
+### 5. Cobertura no es calidad, y los PRs de demostración
+
+**Ejemplo de que 100 % no alcanza (PR de demo #2).** La línea
+`if totalDelMes+monto > presupuesto` queda 100 % cubierta con sólo dos casos ("dentro del
+presupuesto" y "se pasa por mucho"). Cambié `>` por `>=`: la cobertura **siguió en 100 %**, pero
+el caso borde "justo en el tope (se permite)" falló y el pipeline quedó en rojo con el merge
+bloqueado. Un test sin ningún `assert` que sólo llame a `CrearGasto` daría la misma cobertura sin
+verificar nada. La cobertura dice qué código se **ejecutó**, no que esté **verificado**.
+
+**PR bloqueado por cobertura (PR de demo #1).** Agregué `limites.go` (dos funciones nuevas, sin
+tests). Compila y todos los tests existentes pasan, pero la cobertura del backend cayó a
+**82,4 %** (< 90 %) y el check `build-backend` quedó en rojo, con *Squash and merge* bloqueado.
+Después agregué `limites_test.go`, la cobertura volvió a 100 % y el mismo PR pasó a verde y se
+mergeó.
+
+En el frontend probé lo mismo en local con una función nueva sin test: **líneas 84,28 %**
+(< 90 %), y vitest 3.2.7 (con `@vitest/coverage-v8` 3.2.7) salió con
+`ERROR: Coverage for lines (84.28%) does not meet global threshold (90%)` y código de salida 1.
+Dato que me llamó la atención: **las ramas seguían en 100 %**, porque v8 no cuenta las ramas de
+funciones que nunca se ejecutaron. Por eso el umbral exige líneas **y** ramas y no confío sólo
+en ramas.
+
+- PR de demo #1 (rojo → verde, mergeado): `https://github.com/francocaste/ingsoft3-tp01/pull/38`
+- Corrida en rojo (82,4 %): `https://github.com/francocaste/ingsoft3-tp01/actions/runs/38836552181`
+- Corrida en verde tras agregar los tests: `https://github.com/francocaste/ingsoft3-tp01/actions/runs/38837448964`
+- PR de demo #2 (`demo/rompe-regla`, **abierto y en rojo hasta la defensa**):
+  `https://github.com/francocaste/ingsoft3-tp01/pull/39` — run: `https://github.com/francocaste/ingsoft3-tp01/actions/runs/38838021387/job/116771406938`
+- Capturas (carpeta `img/`):
+  - `img/13-demo-rojo-cobertura-82.png`: demo 1, log en rojo con la cobertura en 82,4 % (< 90 %).
+  - `img/14-demo1-pr-bloqueado-rojo.png`: demo 1, PR con `build-backend` en rojo y el merge bloqueado.
+  - `img/17-demo1-verde.png`: demo 1, el mismo PR en verde (run rojo #52, run verde #53) después de agregar los tests.
+  - `img/15-demo2-pr-bloqueado-rojo.png`: demo 2, PR con el merge bloqueado.
+  - `img/16-demo2-log-ci-falla-cobertura-100.png`: demo 2, el log del pipeline fallando con la cobertura en 100 %.
+  - `img/20-demo2-test-borde-falla.png`: demo 2, el caso `justo_en_el_tope_(se_permite)` fallando.
+  - `img/18-resumen-cobertura.png`: resumen de cobertura publicado en el *Summary* del run.
+  - `img/19-artifacts.png`: artefactos `cobertura-backend` y `cobertura-frontend` del run.
+
+### 6. Qué tuve que refactorizar para poder usar un mock
+
+El código original **no se podía testear sin una base de datos**: había una variable global
+`db *sql.DB` y las reglas estaban escritas adentro de los handlers HTTP, mezcladas con SQL.
+Para poder probar las reglas hice tres cosas, sin cambiar el comportamiento ni los códigos de
+estado:
+
+1. Saqué las reglas a **funciones puras** (`ValidarCampos`, `ValidarCategoria`, `ValidarFecha`,
+   `ValidarPresupuesto`, `ValidarTransicion`, `PorcentajeUsado`) en `internal/gastos`.
+2. Definí una **interfaz `Repositorio`** (lo que el servicio necesita de la base) y un
+   `Servicio` que la recibe por **inyección de dependencias**; en producción la implementa
+   Postgres (`repo_sql.go`) y en los tests un doble (`repoFalso`). También inyecté el "ahora"
+   (`func() time.Time`) para que los tests de fecha no dependan del reloj.
+3. Los handlers quedaron finos: decodifican, llaman al servicio y traducen el error de dominio a
+   un status HTTP (`statusDe`). En el frontend pasé `fetch` por parámetro a `enviarGasto`.
+
+Mi doble es **stub y spy a la vez**: *stub* porque devuelve datos que yo fijo (presupuesto,
+total del mes), *spy* porque cuenta las llamadas, y eso me permite verificar **comportamiento**:
+"si la categoría es inválida, no se toca la base" (0 llamadas) o "se inserta exactamente una
+vez". En el frontend, `vi.fn()` hace lo mismo con `fetch` ("si el formulario es inválido, no se
+llama al backend").
+
+### 7. Ejercicio: un camino sin cubrir
+
+Con 100 % en el alcance medido, el camino sin cubrir está en lo que excluí: la función
+`statusDe` de `main.go`, que traduce cada error de dominio a su código HTTP (400 / 404 / 409 /
+422 / 500).
+
+1. **Qué comportamiento queda sin verificar:** que cada error de dominio salga con *su* código
+   (por ejemplo `ErrTransicionInvalida` → 409, `ErrPresupuestoExcedido` → 422) y que un error que
+   no es de dominio salga como 500.
+2. **Qué bug se podría esconder:** alguien cambia el 409 por 400 (o se olvida de agregar un
+   error nuevo al `switch`, que caería en 500). Todos los tests seguirían en verde y la
+   cobertura en 100 %, pero el frontend recibiría un código distinto.
+3. **Qué test lo cubriría:** un test de tabla sobre `statusDe` con cada error (incluso envuelto
+   con `fmt.Errorf("...: %w", err)`) y su código esperado, o un test de integración con
+   `httptest` que dispare cada caso por HTTP. No lo escribí en este TP; queda como deuda
+   conocida y por eso mi 100 % es sobre la lógica y no sobre "toda la app".
+
+### 8. Problemas encontrados y cómo los resolví
+
+- **El código no era testeable** (global `db` y reglas dentro de los handlers): lo resolví con
+  el refactor de la sección 6.
+- **v8 no cuenta las ramas de funciones nunca ejecutadas**: se vio al probar el bloqueo del
+  frontend (ramas 100 % con líneas 84 %); por eso el umbral exige líneas y ramas.
+- **Una cobertura que "pasa" midiendo nada**: si `coverage.include` apuntara a una ruta
+  inexistente, vitest mediría 0 líneas y no se quejaría. Agregué la guarda con `jq` en el
+  pipeline (sección 4).
+- **`scripts/test.sh: set: line 10: illegal option -` dentro del contenedor**: en Windows el
+  script se bajó con saltos de línea CRLF y Alpine leyó `pipefail\r`. Lo resolví con un
+  `.gitattributes` (`*.sh text eol=lf`, `Dockerfile text eol=lf`); el repo ya tenía LF, así que
+  el pipeline nunca estuvo afectado, sólo mi copia local.
+- **`${COVERAGE_DIR:-coverage}` en un script de npm no funciona en Windows** (usa `cmd`, no
+  `sh`): moví esa lógica a `process.env.COVERAGE_DIR` en `vite.config.js`, que anda igual en
+  ambos lados.
+- **Docker Desktop: `failed to prepare extraction snapshot ... parent snapshot ... does not exist`**
+  al exportar la imagen: era un layer de la caché local roto, no el código. Se resolvió
+  reconstruyendo con `docker build --no-cache`.
+- **`pq: column "estado" of relation "gastos" does not exist`** al probar la app: el volumen de
+  Postgres era del TP2 y el `CREATE TABLE IF NOT EXISTS` no altera una tabla que ya existe. Lo
+  resolví con `docker compose down -v`. Deuda: faltan migraciones reales.
+- **Deuda conocida de zona horaria:** `hoyISO()` usa `toISOString()` (UTC), así que después de
+  las 21:00 en Argentina devuelve el día siguiente. Lo vi con el formulario ofreciendo el 16/10
+  cuando para mí era 15/10. Viene del código original y el backend usa el mismo criterio, así
+  que no lo cambié en este TP.
+- **`npm audit` reporta 6 vulnerabilidades** en dependencias de desarrollo (apareció al instalar
+  vitest; no revisé una por una de qué paquete vienen). No entran en la imagen final (que sólo
+  lleva nginx con el build) y no usé `npm audit fix --force` para no romper versiones.
+
+### 9. Declaración de uso de IA
+
+Usé IA (Claude) para analizar mi código y proponer el refactor que lo hace testeable, para
+escribir los tests y para armar la etapa `test` de los Dockerfiles y los pasos del workflow. Fui
+armando cada etapa paso a paso, en un PR por etapa, y verifiqué cada cosa corriéndola: los tests
+y el cálculo de cobertura, el bloqueo por umbral (con `COVERAGE_MIN=101` y agregando código sin
+tests, en backend y en frontend) y el borde `>` vs `>=`. Puedo explicar sin el texto generado
+qué es un mock frente a un stub, por qué línea y rama no son lo mismo, por qué elegí 90 % y qué
+quedó afuera de la cobertura. 
+Los tests, el refactor y los pasos del workflow me los propuso Claude; yo los fui escribiendo y
+corriendo etapa por etapa, y entiendo qué hace cada uno. Detecté y corregí por mi cuenta errores
+que aparecieron al aplicarlos: una línea sobrante en `limites.go` que rompía la compilación, el
+nombre mal escrito de `.gitattributes` (`.gitatributes`, que git ignoraba), y el CRLF de
+`test.sh` que sólo se manifestó en mi máquina con Docker. Claude me advirtió antes de que lo
+usara que `${COVERAGE_DIR:-coverage}` no funcionaría en `cmd` de Windows, y lo moví a la config.
