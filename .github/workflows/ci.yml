@@ -1,3 +1,4 @@
+---
 name: CI
 
 on:
@@ -21,6 +22,44 @@ jobs:
       - name: Preparar el constructor que sabe cachear
         uses: docker/setup-buildx-action@v4
 
+      # --- Tests: se construye SOLO la etapa "test" del Dockerfile ---
+      - name: Construir la imagen de tests del backend
+        uses: docker/build-push-action@v7
+        with:
+          context: ./backend
+          target: test
+          load: true
+          push: false
+          provenance: false
+          tags: backend-test:ci
+          cache-from: type=gha,scope=backend-test
+          cache-to: type=gha,mode=max,scope=backend-test
+
+      # El contenedor corre los tests y termina con codigo 1 si falla algun
+      # test o si la cobertura queda por debajo del umbral. Eso rompe el job.
+      - name: Correr tests y verificar cobertura (backend)
+        run: |
+          mkdir -p TestResults
+          docker run --rm -v "${{ github.workspace }}/TestResults:/out" backend-test:ci
+
+      # if: !cancelled() => se ejecuta aunque los tests hayan fallado,
+      # que es justo cuando mas sirve ver el reporte.
+      - name: Publicar resumen de cobertura (backend)
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -f TestResults/resumen.md ]; then
+            cat TestResults/resumen.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Subir reporte de cobertura (backend)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: cobertura-backend
+          path: TestResults/
+          if-no-files-found: warn
+
+      # --- Build de la imagen final (igual que antes) ---
       - name: Construir la imagen del backend
         uses: docker/build-push-action@v7
         with:
@@ -44,6 +83,60 @@ jobs:
       - name: Preparar el constructor que sabe cachear
         uses: docker/setup-buildx-action@v4
 
+      # --- Tests ---
+      - name: Construir la imagen de tests del frontend
+        uses: docker/build-push-action@v7
+        with:
+          context: ./frontend
+          target: test
+          load: true
+          push: false
+          provenance: false
+          tags: frontend-test:ci
+          cache-from: type=gha,scope=frontend-test
+          cache-to: type=gha,mode=max,scope=frontend-test
+
+      - name: Correr tests y verificar cobertura (frontend)
+        run: |
+          mkdir -p coverage-frontend
+          docker run --rm \
+            -e COVERAGE_DIR=/salida/reporte \
+            -v "${{ github.workspace }}/coverage-frontend:/salida" \
+            frontend-test:ci
+
+      - name: Publicar resumen de cobertura (frontend)
+        if: ${{ !cancelled() }}
+        run: |
+          RESUMEN=coverage-frontend/reporte/coverage-summary.json
+          if [ ! -f "$RESUMEN" ]; then
+            echo "::error::No se genero $RESUMEN (¿fallaron los tests antes de medir cobertura?)"
+            exit 1
+          fi
+          # Si el alcance quedara vacio, 0/0 podria pasar el umbral sin medir nada.
+          if [ "$(jq '.total.lines.total' "$RESUMEN")" -eq 0 ]; then
+            echo "::error::La cobertura mide 0 lineas: el alcance quedo vacio"
+            exit 1
+          fi
+          {
+            echo "### Cobertura del frontend"
+            echo
+            echo "| Metrica | Cobertura |"
+            echo "|---|---|"
+            echo "| Lineas | $(jq '.total.lines.pct' "$RESUMEN")% |"
+            echo "| Ramas | $(jq '.total.branches.pct' "$RESUMEN")% |"
+            echo "| Funciones | $(jq '.total.functions.pct' "$RESUMEN")% |"
+            echo "| Sentencias | $(jq '.total.statements.pct' "$RESUMEN")% |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Subir reporte de cobertura (frontend)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: cobertura-frontend
+          path: coverage-frontend/reporte/
+          if-no-files-found: warn
+
+      # --- Build de la imagen final (igual que antes) ---
       - name: Construir la imagen del frontend
         uses: docker/build-push-action@v7
         with:
