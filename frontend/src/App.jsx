@@ -97,7 +97,7 @@ export default function App() {
 
   return (
     <div className="container">
-      <h1>Gestión de Gastos Personales</h1>
+      <h1>Gestión de Gastos Personales · TP6</h1>
 
       <form onSubmit={agregarGasto} className="form">
         <input
