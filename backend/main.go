@@ -53,8 +53,12 @@ func main() {
 	mux.HandleFunc("GET /api/presupuestos", listPresupuestosHandler)
 	mux.HandleFunc("POST /api/presupuestos", upsertPresupuestoHandler)
 
-	log.Println("escuchando en :8080")
-	if err := http.ListenAndServe(":8080", withCORS(mux)); err != nil {
+	puerto := os.Getenv("PORT")
+	if puerto == "" {
+		puerto = "8080"
+	}
+	log.Println("escuchando en :" + puerto)
+	if err := http.ListenAndServe(":"+puerto, withCORS(mux)); err != nil {
 		log.Fatal(err)
 	}
 }
