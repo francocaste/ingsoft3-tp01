@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
+import {
+  CATEGORIAS,
+  calcularTotal,
+  claseDePorcentaje,
+  enviarGasto,
+  formularioValido,
+  hoyISO,
+} from './lib/gastos'
 // Nota: agregar a App.css la clase .excedido { color: #f87171; font-weight: bold; }
-
-const CATEGORIAS = ['Comida', 'Transporte', 'Ocio', 'Servicios', 'Salud', 'Otros']
-
-function hoyISO() {
-  return new Date().toISOString().slice(0, 10)
-}
 
 export default function App() {
   const [gastos, setGastos] = useState([])
@@ -42,38 +44,15 @@ export default function App() {
     cargar()
   }, [])
 
-  // El formulario es invalido si falta algun dato o la fecha es futura.
-  // Con esto deshabilitamos el boton en vez de dejar que el usuario
-  // descubra el error recien despues de enviarlo.
-  const formularioValido =
-    descripcion.trim() !== '' &&
-    Number(monto) > 0 &&
-    fecha !== '' &&
-    fecha <= hoyISO()
+  // Las reglas del formulario viven en lib/gastos.js (y estan testeadas ahi).
+  const puedeEnviar = formularioValido({ descripcion, monto, fecha })
 
   async function agregarGasto(e) {
     e.preventDefault()
     setError('')
-    const res = await fetch('/api/gastos', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        descripcion,
-        monto: parseFloat(monto),
-        categoria,
-        fecha: new Date(fecha).toISOString(),
-      }),
-    })
-    if (!res.ok) {
-      const texto = await res.text()
-      // El backend devuelve 422 puntualmente cuando se excede el
-      // presupuesto de la categoria: se lo mostramos distinto al resto
-      // de los errores de validacion.
-      if (res.status === 422) {
-        setError(`Presupuesto excedido: ${texto}`)
-      } else {
-        setError(texto)
-      }
+    const resultado = await enviarGasto(fetch, { descripcion, monto, categoria, fecha })
+    if (!resultado.ok) {
+      setError(resultado.error)
       return
     }
     setDescripcion('')
@@ -114,7 +93,7 @@ export default function App() {
     cargar()
   }
 
-  const total = gastos.reduce((acc, g) => acc + Number(g.monto), 0)
+  const total = calcularTotal(gastos)
 
   return (
     <div className="container">
@@ -149,7 +128,7 @@ export default function App() {
           max={hoyISO()}
           onChange={(e) => setFecha(e.target.value)}
         />
-        <button type="submit" disabled={!formularioValido}>
+        <button type="submit" disabled={!puedeEnviar}>
           Agregar
         </button>
       </form>
@@ -204,7 +183,7 @@ export default function App() {
                 <li key={r.categoria}>
                   {r.categoria}: ${Number(r.total).toFixed(2)}
                   {r.porcentaje_usado != null && (
-                    <span className={r.porcentaje_usado > 100 ? 'excedido' : ''}>
+                    <span className={claseDePorcentaje(r.porcentaje_usado)}>
                       {' '}
                       ({r.porcentaje_usado.toFixed(0)}% del presupuesto)
                     </span>
