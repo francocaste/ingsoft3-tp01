@@ -52,7 +52,7 @@ func ValidarPresupuesto(totalDelMes, monto, presupuesto float64, tienePresupuest
 	if !tienePresupuesto {
 		return nil
 	}
-	if totalDelMes+monto > presupuesto {
+	if totalDelMes+monto >= presupuesto {
 		return ErrPresupuestoExcedido
 	}
 	return nil
