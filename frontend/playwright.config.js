@@ -20,7 +20,13 @@ export default defineConfig({
   // dos veces, es rojo. La traza se graba solo en ese reintento.
   retries: process.env.CI ? 1 : 0,
 
-  reporter: [['list'], ['html', { open: 'never' }]],
+  // El reporte HTML es el artefacto que se publica; el JSON lo lee el pipeline para
+  // contar cuantas pruebas pasaron y cuantas se salteo.
+  reporter: [
+    ['list'],
+    ['html', { open: 'never' }],
+    ['json', { outputFile: 'resultados-playwright.json' }],
+  ],
 
   use: {
     baseURL: process.env.E2E_BASE_URL || 'http://localhost:3000',
