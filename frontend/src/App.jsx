@@ -145,7 +145,7 @@ export default function App() {
           onChange={(e) => setFecha(e.target.value)}
         />
         <button type="submit" disabled={!puedeEnviar}>
-          Añadir
+          Agregar
         </button>
       </form>
 
