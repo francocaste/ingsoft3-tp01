@@ -21,5 +21,7 @@ ENTRYPOINT ["sh", "scripts/test.sh"]
 FROM alpine:3.20 AS final
 WORKDIR /app
 COPY --from=build /app/server .
+ARG GIT_SHA=
+ENV GIT_SHA=$GIT_SHA
 EXPOSE 8080
 ENTRYPOINT ["./server"]

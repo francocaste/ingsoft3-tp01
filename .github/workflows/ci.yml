@@ -77,6 +77,7 @@ jobs:
           context: ./backend
           push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           tags: ghcr.io/${{ github.repository }}-backend:sha-${{ github.sha }}
+          build-args: GIT_SHA=${{ github.sha }}
           cache-from: type=gha,scope=backend
           cache-to: type=gha,mode=max,scope=backend
 
@@ -196,16 +197,18 @@ jobs:
           URL_API: https://gastos-api-qa-r6ig.onrender.com
           URL_FRONT: https://gastos-front-qa-ez08.onrender.com
         run: |
-          echo "Esperando a que QA este vivo..."
+          echo "Esperando a que QA corra el commit $GITHUB_SHA ..."
           for i in $(seq 1 30); do
-            if curl -fsS --max-time 10 "$URL_API/health" \
+            SALUD=$(curl -fsS --max-time 10 "$URL_API/health" || true)
+            echo "intento $i - /health: ${SALUD:-sin respuesta}"
+            if echo "$SALUD" | grep -q "\"commit\":\"$GITHUB_SHA\"" \
                && curl -fsS --max-time 10 "$URL_API/api/gastos" > /dev/null \
                && curl -fsS --max-time 10 "$URL_FRONT/" > /dev/null; then
-              echo "QA responde (API + BD + front)"; exit 0
+              echo "QA corre el commit verificado (API + BD + front)"; exit 0
             fi
             sleep 20
           done
-          echo "QA no respondio a tiempo"; exit 1
+          echo "QA no corre el commit $GITHUB_SHA a tiempo"; exit 1
 
   # --- Promocion a PROD: pasa por la compuerta humana ---
   deploy-prod:
@@ -233,13 +236,15 @@ jobs:
           URL_API: https://gastos-api-prod-fvsa.onrender.com
           URL_FRONT: https://gastos-front-prod-96km.onrender.com
         run: |
-          echo "Esperando a que PROD este vivo..."
+          echo "Esperando a que PROD corra el commit $GITHUB_SHA ..."
           for i in $(seq 1 30); do
-            if curl -fsS --max-time 10 "$URL_API/health" \
+            SALUD=$(curl -fsS --max-time 10 "$URL_API/health" || true)
+            echo "intento $i - /health: ${SALUD:-sin respuesta}"
+            if echo "$SALUD" | grep -q "\"commit\":\"$GITHUB_SHA\"" \
                && curl -fsS --max-time 10 "$URL_API/api/gastos" > /dev/null \
                && curl -fsS --max-time 10 "$URL_FRONT/" > /dev/null; then
-              echo "PROD responde (API + BD + front)"; exit 0
+              echo "PROD corre el commit verificado (API + BD + front)"; exit 0
             fi
             sleep 20
           done
-          echo "PROD no respondio a tiempo"; exit 1
+          echo "PROD no corre el commit $GITHUB_SHA a tiempo"; exit 1
