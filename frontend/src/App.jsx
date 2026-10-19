@@ -47,6 +47,15 @@ export default function App() {
   // Las reglas del formulario viven en lib/gastos.js (y estan testeadas ahi).
   const puedeEnviar = formularioValido({ descripcion, monto, fecha })
 
+  // Aviso visible mientras el formulario es invalido: el boton deshabilitado solo
+  // no le dice al usuario QUE esta mal.
+  const avisoDeValidacion =
+    descripcion !== '' && descripcion.trim() === ''
+      ? 'La descripción no puede estar vacía'
+      : monto !== '' && !(Number(monto) > 0)
+        ? 'El monto tiene que ser mayor a 0'
+        : ''
+
   async function agregarGasto(e) {
     e.preventDefault()
     setError('')
@@ -101,12 +110,14 @@ export default function App() {
 
       <form onSubmit={agregarGasto} className="form">
         <input
+          aria-label="Descripción"
           placeholder="Descripción"
           value={descripcion}
           onChange={(e) => setDescripcion(e.target.value)}
           required
         />
         <input
+          aria-label="Monto"
           type="number"
           step="0.01"
           min="0.01"
@@ -115,7 +126,11 @@ export default function App() {
           onChange={(e) => setMonto(e.target.value)}
           required
         />
-        <select value={categoria} onChange={(e) => setCategoria(e.target.value)}>
+        <select
+          aria-label="Categoría"
+          value={categoria}
+          onChange={(e) => setCategoria(e.target.value)}
+        >
           {CATEGORIAS.map((c) => (
             <option key={c} value={c}>
               {c}
@@ -123,6 +138,7 @@ export default function App() {
           ))}
         </select>
         <input
+          aria-label="Fecha"
           type="date"
           value={fecha}
           max={hoyISO()}
@@ -133,12 +149,22 @@ export default function App() {
         </button>
       </form>
 
-      {error && <p className="error">{error}</p>}
+      {avisoDeValidacion && (
+        <p role="alert" className="error">
+          {avisoDeValidacion}
+        </p>
+      )}
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
 
       <details className="presupuestos">
         <summary>Presupuestos mensuales por categoría</summary>
         <form onSubmit={guardarPresupuesto} className="form">
           <select
+            aria-label="Categoría del presupuesto"
             value={presupuestoCategoria}
             onChange={(e) => setPresupuestoCategoria(e.target.value)}
           >
@@ -149,6 +175,7 @@ export default function App() {
             ))}
           </select>
           <input
+            aria-label="Monto mensual del presupuesto"
             type="number"
             step="0.01"
             min="0.01"
@@ -214,12 +241,18 @@ export default function App() {
                   <td>{g.estado}</td>
                   <td>
                     <button
+                      aria-label={`Marcar pagado ${g.descripcion}`}
                       onClick={() => marcarComoPagado(g.id)}
                       disabled={g.estado === 'pagado'}
                     >
                       Marcar pagado
                     </button>
-                    <button onClick={() => eliminarGasto(g.id)}>Eliminar</button>
+                    <button
+                      aria-label={`Eliminar ${g.descripcion}`}
+                      onClick={() => eliminarGasto(g.id)}
+                    >
+                      Eliminar
+                    </button>
                   </td>
                 </tr>
               ))}
