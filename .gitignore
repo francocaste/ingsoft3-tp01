@@ -19,3 +19,8 @@ coverage/
 TestResults/
 coverage-frontend/
 *.out
+# playwright
+playwright-report/
+test-results/
+reporte-rojo/
+reporte-verde/
