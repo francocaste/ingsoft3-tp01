@@ -1108,3 +1108,88 @@ imagen `sha-<commit>` en ghcr; `deploy-qa` le manda esa imagen a Render con el h
 smoke que compara el commit; `integracion` le habla a la API de QA y, si pasa, `e2e` usa el front en
 un navegador; recién con las dos en verde `deploy-prod` se pausa para mi aprobación y manda **la misma**
 imagen; y por qué un rojo en la e2e con la integración en verde dice que el problema está en el front.
+
+---
+
+## TP8 — Infraestructura como código
+
+### 1. Qué declaré y con qué herramienta
+
+Elegí el riel canónico: **Terraform v1.16.6** con los providers **`kislerdm/neon` 0.18.0** y
+**`render-oss/render` 1.9.1**, fijados por versión en `infra/main.tf` y por hash en el
+`.terraform.lock.hcl` (que sí se versiona). Lo declarado es un entorno **nuevo, `preprod`**, que no
+existía: un proyecto de Neon propio (`gastos-preprod`, con su rol y su base) y dos servicios de Render
+(`gastos-api-preprod` y `gastos-front-preprod`) que ejecutan **la imagen del TP7**
+(`sha-ed172f47…`, la de la release `v7.0.0`). **QA y producción no se tocaron**: ni se importaron ni
+se migraron, y siguieron respondiendo durante todo el trabajo.
+
+- **Sin credenciales en el código:** los providers leen `NEON_API_KEY`, `RENDER_API_KEY` y
+  `RENDER_OWNER_ID` del entorno; el id de la organización de Neon entra por `TF_VAR_neon_org_id`.
+- **Nada se copia a mano.** La `DATABASE_URL` de la api se arma con el host, la base y el rol que
+  devolvió Neon (la contraseña va con `urlencode`), y la `BACKEND_URL` del front sale del atributo
+  `url` de la api. En el TP6 esas dos cosas se copiaban y pegaban, y fueron los dos errores más caros.
+- **No declaré `GIT_SHA` en los servicios:** el commit que informa `/health` está horneado en la
+  imagen, y una variable del servicio lo pisaría.
+- **El estado vive en mi máquina** (`terraform.tfstate`, ignorado en `.gitignore`). Lo abrí y la
+  contraseña del rol está en texto plano: por eso no se commitea. Es además la única memoria de que
+  preprod es mío: si lo pierdo, el próximo `plan` propondría crearlo todo de nuevo contra recursos que
+  ya existen. En un equipo tendría que vivir en un lugar compartido y con bloqueo.
+- **`image_tag` es fijo, a propósito.** Cambiarlo es, para Terraform, una modificación in situ, y
+  Render no deja modificar un servicio del plan gratuito, así que el `apply` se cortaría. Preprod es
+  desechable: si tiene que correr otra imagen, se cambia la línea por PR y se recrea (`destroy` +
+  `apply`, o `apply -replace`).
+
+### 2. Qué comprobé
+
+- **Idempotencia:** el segundo `plan` después del `apply` dice `No changes`.
+- **Entorno, no recursos:** `/health` de la api informa el commit de la imagen, `/api/gastos` devuelve
+  `[]` desde su propia base de Neon, y el mismo `/api/gastos` pedido por el front también (el nginx llega
+  a la api de preprod por la `BACKEND_URL` derivada).
+- **Ciclo de vida:** `destroy` → `apply` dejó preprod idéntico. El `destroy` borra en orden inverso al
+  de las dependencias: `front`, `api`, `database`, `role`, `project`. Nadie lo escribió: sale de las
+  referencias del HCL (el plan lista los recursos en otro orden, alfabético, y el orden real se ve al
+  ejecutar). QA y producción siguieron respondiendo, cada una con su commit.
+- **Drift:** borré a mano la base `gastos_preprod` en la consola de Neon, el `plan` lo detectó
+  (`1 to add`) y el `apply` la repuso. Después creé a mano una base `base_intrusa` que mi código no
+  declara y el `plan` dijo `No changes`: Terraform vigila lo que declaré, no todo lo que existe. Lo
+  mismo vale para mis QA y producción: existen y no aparecen en ningún plan mío.
+- **Cuota:** pasé de 4 a 6 servicios gratuitos en el mismo workspace de Render, que comparten las
+  750 horas del mes. Si me paso, Render suspende todos, producción incluida. Por eso preprod se
+  destruye cuando no se usa (`terraform destroy`) y se recrea cuando hace falta.
+
+### 3. Problemas encontrados y cómo los resolví
+
+- **No tenía ninguna de las claves.** Tuve que crear una API key en Neon (*Account settings → API
+  keys*) y otra en Render. Las cargué sólo en la sesión de la terminal con `Read-Host -MaskInput`.
+- **La URL del dashboard de Render no daba el owner id:** la que copié era la de un proyecto (`prj-…`).
+  El `RENDER_OWNER_ID` (`tea-…`) lo obtuve pidiéndoselo a la API (`GET /v1/owners`).
+- **Neon exige una organización al crear un proyecto.** El primer `apply` falló con
+  `HTTP 400: org_id is required`, antes de crear nada. Obtuve el id con
+  `GET /api/v2/users/me/organizations`, agregué `org_id = var.neon_org_id` al proyecto y lo paso por
+  `TF_VAR_neon_org_id`. La guía no lo mencionaba: es un cambio de la API de Neon posterior a su
+  redacción.
+- **Mi backend es Go, no .NET:** la guía usa la variable `ConnectionStrings__Default` con el formato de
+  .NET. El mío lee `DATABASE_URL` en formato URL, con `?sslmode=require` porque Neon exige TLS.
+- **Al recrear, Render cambió las URLs.** La primera vez los servicios quedaron en `…-dpez` y
+  `…-mcfh`; después de `destroy` + `apply`, en `…-vu2t` y `…-b289`. Es un caso que la guía decía no
+  haber medido. Consecuencia: las direcciones se leen siempre del `output`, nunca de un marcador. Y el
+  front no se enteró del cambio porque su `BACKEND_URL` se deriva.
+- **Un `terraform destroy` lo cancelé sin querer** al no escribir `yes`: no se borró nada y repetí el
+  comando.
+
+### 4. Qué no hice
+
+No hice la parte opcional del plan en el pipeline (§3.6) ni conecté preprod a la cadena del TP7:
+preprod se crea y se prueba desde mi terminal. Tampoco probé `prevent_destroy`. No puedo afirmar nada
+sobre esas dos cosas más que lo que dice la guía.
+
+### 5. Declaración de uso de IA
+
+Usé IA (Claude) para el TP8 paso a paso. Me escribió el HCL de `infra/` adaptado a mi app (la
+`DATABASE_URL` para el backend en Go, las variables del front, la imagen del TP7), me guió para
+conseguir las claves y diagnosticó los errores del `org_id` y del owner id. No me limité a copiar:
+corrí yo cada comando en mi máquina y en las consolas de Neon y Render, leí cada plan antes de aplicar
+(qué se crea, qué significa `(known after apply)`, que la última línea dijera `to destroy` sólo
+cuando lo esperaba), verifiqué con `curl` que la api y el front de preprod responden, y provoqué y
+reparé el drift a mano. Puedo leer un plan en voz alta y explicar qué hace cada acción sin el texto
+generado, y crear y destruir preprod frente al docente.

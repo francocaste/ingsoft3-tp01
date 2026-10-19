@@ -4,9 +4,9 @@
 
 Aplicación web para registrar gastos personales, organizarlos por categoría y controlar un
 presupuesto mensual. Proyecto de la materia **Ingeniería de Software 3** (Universidad Católica
-de Córdoba), desarrollado a lo largo de siete trabajos prácticos: control de versiones,
+de Córdoba), desarrollado a lo largo de ocho trabajos prácticos: control de versiones,
 contenedores, planificación, integración continua, testing en el pipeline, entrega continua y
-pruebas de integración y e2e como compuerta de promoción.
+pruebas de integración y e2e como compuerta de promoción e infraestructura como código.
 
 ## Funcionalidades
 
@@ -37,6 +37,7 @@ pruebas de integración y e2e como compuerta de promoción.
 | Integración y entrega continua | GitHub Actions (con *environments* `qa` y `production`) |
 | Registry de imágenes | GitHub Container Registry (`ghcr.io`) |
 | Entornos desplegados | Render (servicios Docker) y Neon (PostgreSQL) |
+| Infraestructura como código | Terraform (providers de Neon y Render) |
 | Tests | `go test` (backend), Vitest con cobertura v8 (frontend) y Playwright (integración y e2e) |
 
 ## Estructura del repositorio
@@ -56,6 +57,7 @@ pruebas de integración y e2e como compuerta de promoción.
 │   ├── e2e/                     # Playwright: api.spec.js (integración) y gastos.spec.js (e2e)
 │   ├── playwright.config.js     # tiempos pensados para el cold start de QA
 │   └── Dockerfile               # etapas: build, test y final
+├── infra/                       # Terraform: el entorno preprod (base en Neon + api y front en Render)
 ├── .github/workflows/ci.yml     # CI, publicación en ghcr, pruebas contra QA y despliegue a QA y PROD
 ├── docker-compose.yml
 ├── .env.example
@@ -203,6 +205,27 @@ Las URLs vivas de QA y PROD, las imágenes publicadas y las corridas de referenc
 principio de [`decisiones.md`](decisiones.md). El plan de rollback (con el tiempo medido) está en la
 sección 8 del TP6, y la estrategia de etiquetas y cómo llegar de una release a su imagen, en las
 secciones 2 y 3 del TP7.
+
+## Infraestructura como código (TP8)
+
+La carpeta [`infra/`](infra/) declara con Terraform un entorno **`preprod`** (un proyecto de Neon con
+su base y dos servicios de Render que ejecutan la imagen publicada por el pipeline). No toca QA ni
+PROD: nace con `terraform apply` y desaparece con `terraform destroy`. Las credenciales no están en el
+código: los providers las leen del entorno.
+
+```bash
+cd infra
+export NEON_API_KEY=... RENDER_API_KEY=... RENDER_OWNER_ID=tea-... TF_VAR_neon_org_id=org-...
+terraform init
+terraform plan
+terraform apply
+terraform output                 # las URLs de api y front de preprod
+terraform destroy                # cuando no se usa: los servicios gratuitos comparten las 750 h del mes
+```
+
+El estado (`terraform.tfstate`) queda en la máquina de quien aplica y no se versiona: tiene secretos
+adentro. El detalle de las decisiones, los problemas y lo que no se hizo está en la sección TP8 de
+[`decisiones.md`](decisiones.md).
 
 ## Documentación
 
