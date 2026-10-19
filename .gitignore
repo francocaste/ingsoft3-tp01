@@ -25,3 +25,10 @@ test-results/
 reporte-rojo/
 reporte-verde/
 resultados-playwright.json
+
+# terraform (TP8): el estado tiene secretos adentro; el .terraform.lock.hcl SI se versiona
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfvars
+crash.log
