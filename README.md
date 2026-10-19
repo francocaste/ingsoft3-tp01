@@ -4,8 +4,9 @@
 
 Aplicación web para registrar gastos personales, organizarlos por categoría y controlar un
 presupuesto mensual. Proyecto de la materia **Ingeniería de Software 3** (Universidad Católica
-de Córdoba), desarrollado a lo largo de seis trabajos prácticos: control de versiones,
-contenedores, planificación, integración continua, testing en el pipeline y entrega continua.
+de Córdoba), desarrollado a lo largo de siete trabajos prácticos: control de versiones,
+contenedores, planificación, integración continua, testing en el pipeline, entrega continua y
+pruebas de integración y e2e como compuerta de promoción.
 
 ## Funcionalidades
 
@@ -36,7 +37,7 @@ contenedores, planificación, integración continua, testing en el pipeline y en
 | Integración y entrega continua | GitHub Actions (con *environments* `qa` y `production`) |
 | Registry de imágenes | GitHub Container Registry (`ghcr.io`) |
 | Entornos desplegados | Render (servicios Docker) y Neon (PostgreSQL) |
-| Tests | `go test` (backend) y Vitest con cobertura v8 (frontend) |
+| Tests | `go test` (backend), Vitest con cobertura v8 (frontend) y Playwright (integración y e2e) |
 
 ## Estructura del repositorio
 
@@ -52,8 +53,10 @@ contenedores, planificación, integración continua, testing en el pipeline y en
 │   ├── src/App.jsx              # interfaz
 │   ├── src/lib/gastos.js        # lógica pura del frontend (y su test)
 │   ├── default.conf.template    # plantilla de nginx: BACKEND_URL y DNS_RESOLVER por variable
+│   ├── e2e/                     # Playwright: api.spec.js (integración) y gastos.spec.js (e2e)
+│   ├── playwright.config.js     # tiempos pensados para el cold start de QA
 │   └── Dockerfile               # etapas: build, test y final
-├── .github/workflows/ci.yml     # CI, publicación en ghcr y despliegue a QA y PROD
+├── .github/workflows/ci.yml     # CI, publicación en ghcr, pruebas contra QA y despliegue a QA y PROD
 ├── docker-compose.yml
 ├── .env.example
 ├── decisiones.md                # decisiones y justificaciones de cada TP
@@ -135,6 +138,21 @@ El alcance medido es la lógica pura (`backend/internal/...` y `frontend/src/lib
 fuera el código de arranque, los handlers, el SQL y el render de React; los criterios de esta
 decisión están en [`decisiones.md`](decisiones.md).
 
+**Integración y e2e (Playwright)**, desde `frontend/`. Son las dos suites que el pipeline corre
+contra QA antes de promover a PROD; también corren en local contra el compose:
+
+```bash
+npm install
+npx playwright install chromium
+docker compose up -d --build                                  # desde la raíz del repo
+npx playwright test e2e/api.spec.js                           # integración: API + base, sin navegador
+npx playwright test e2e/gastos.spec.js                        # e2e: navegador contra el front
+```
+
+Sin variables apuntan a `http://localhost:8080` (API) y `http://localhost:3000` (front); en el
+pipeline se definen `API_BASE_URL` y `E2E_BASE_URL` con las URLs de QA. Qué cubre cada suite y qué
+queda afuera está en la sección 5 del TP7 de [`decisiones.md`](decisiones.md).
+
 ## Integración continua
 
 El workflow [`ci.yml`](.github/workflows/ci.yml) se ejecuta en cada Pull Request y en cada push a
@@ -150,33 +168,41 @@ El workflow [`ci.yml`](.github/workflows/ci.yml) se ejecuta en cada Pull Request
 Ambos checks son obligatorios para integrar a `main`, que está protegida (se trabaja con una
 rama y un Pull Request por cambio, integrados con *squash merge*).
 
-## Entrega continua (TP6)
+## Entrega continua (TP6 y TP7)
 
 Tras el merge a `main`, el mismo workflow despliega en dos entornos de Render, cada uno con su
-propia base en Neon:
+propia base en Neon. Desde el TP7 **se construye una sola vez y se promueve esa imagen**, y PROD
+queda detrás de las pruebas contra QA:
 
 ```text
-main ─→ build-backend + build-frontend ─→ deploy-qa (automático + smoke) ─→ deploy-prod (aprobación manual + smoke)
+main ─→ build-backend + build-frontend ─→ deploy-qa (automático + smoke) ─→ integracion ─→ e2e ─→ deploy-prod (aprobación manual + smoke)
 ```
 
 - **QA** se despliega solo; **PROD** queda en pausa hasta que alguien aprueba el environment
-  `production`. Es *Continuous Delivery*, no *Deployment*.
-- Los despliegues los dispara el pipeline con *deploy hooks* de Render, **con el commit verificado**
-  (`&ref=$GITHUB_SHA`). Los hooks viven como secrets de cada environment, nunca en el repositorio.
+  `production`, y sólo se llega ahí con las dos suites de Playwright en verde. Es *Continuous
+  Delivery*, no *Deployment*.
+- Los servicios de Render ejecutan la **imagen ya publicada en ghcr**
+  (`...-backend|frontend:sha-<commit>`); Render no reconstruye nada. El pipeline le indica cuál
+  con el parámetro `imgURL` de cada *deploy hook*, y QA y PROD reciben **la misma imagen**. Los
+  hooks viven como secrets de cada environment, nunca en el repositorio.
+- No se publica `latest`: la etiqueta de cada imagen es el commit que la originó.
 - El *smoke test* reintenta hasta que `/health` informa el commit desplegado y la base y el
   frontend responden.
-- La plataforma reconstruye la imagen desde el repo (misma versión del código, no la misma imagen
-  que se publicó en ghcr).
+- `integracion` prueba la API de QA con su base real (sin navegador) y `e2e` prueba el front de QA
+  en un navegador. Si cualquiera falla, `deploy-prod` no arranca y no llega a pedir aprobación;
+  los reportes de Playwright quedan como artefactos de la corrida (7 días).
 
 | Variable | Dónde | Para qué |
 |---|---|---|
 | `DATABASE_URL`, `PORT` | backend (entorno) | conexión a la base y puerto |
 | `BACKEND_URL`, `DNS_RESOLVER` | frontend (entorno) | a dónde proxea nginx `/api/` (por defecto `http://backend:8080` y `127.0.0.11`) |
-| `GIT_SHA` | backend (argumento de build) | commit que informa `/health`; en Render se usa `RENDER_GIT_COMMIT` |
+| `GIT_SHA` | backend (argumento de build) | commit que informa `/health`; lo fija el CI al construir la imagen |
+| `API_BASE_URL`, `E2E_BASE_URL` | Playwright (job del pipeline o local) | API y front sobre los que corren la integración y la e2e |
 
 Las URLs vivas de QA y PROD, las imágenes publicadas y las corridas de referencia están al
 principio de [`decisiones.md`](decisiones.md). El plan de rollback (con el tiempo medido) está en la
-sección 8 del TP6.
+sección 8 del TP6, y la estrategia de etiquetas y cómo llegar de una release a su imagen, en las
+secciones 2 y 3 del TP7.
 
 ## Documentación
 
