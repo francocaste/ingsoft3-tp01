@@ -12,6 +12,8 @@ import (
 
 	"gastos-backend/internal/gastos"
 
+	"github.com/getsentry/sentry-go"
+	sentryhttp "github.com/getsentry/sentry-go/http"
 	_ "github.com/lib/pq"
 )
 
@@ -21,6 +23,17 @@ var (
 )
 
 func main() {
+	// Sentry: errores y tiempos de cada pedido. El DSN llega por el entorno; si la
+	// variable no esta (en local, en tests, en QA) la libreria queda apagada y la app anda igual.
+	if err := sentry.Init(sentry.ClientOptions{
+		Dsn:              os.Getenv("SENTRY_DSN"),
+		Release:          os.Getenv("GIT_SHA"),
+		TracesSampleRate: 1.0, // medir todos los pedidos
+	}); err != nil {
+		log.Printf("sentry.Init: %v", err)
+	}
+	defer sentry.Flush(2 * time.Second)
+
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		log.Fatal("falta la variable de entorno DATABASE_URL")
@@ -54,12 +67,21 @@ func main() {
 	mux.HandleFunc("GET /api/presupuestos", listPresupuestosHandler)
 	mux.HandleFunc("POST /api/presupuestos", upsertPresupuestoHandler)
 
+	// TEMPORAL (TP9): error de prueba para ver un error llegar a Sentry. Se saca al cerrar el practico.
+	mux.HandleFunc("GET /api/falla", func(w http.ResponseWriter, r *http.Request) {
+		if hub := sentry.GetHubFromContext(r.Context()); hub != nil {
+			hub.CaptureException(errors.New("Falla de prueba del TP9"))
+		}
+		http.Error(w, "falla de prueba", http.StatusInternalServerError)
+	})
+
 	puerto := os.Getenv("PORT")
 	if puerto == "" {
 		puerto = "8080"
 	}
 	log.Println("escuchando en :" + puerto)
-	if err := http.ListenAndServe(":"+puerto, withCORS(mux)); err != nil {
+	sentryHandler := sentryhttp.New(sentryhttp.Options{Repanic: true})
+	if err := http.ListenAndServe(":"+puerto, sentryHandler.Handle(withCORS(mux))); err != nil {
 		log.Fatal(err)
 	}
 }
