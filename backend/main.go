@@ -32,6 +32,7 @@ func main() {
 		log.Fatalf("no se pudo abrir la conexion: %v", err)
 	}
 	defer db.Close()
+	db.SetConnMaxIdleTime(time.Minute)
 
 	if err := waitForDB(db, 15); err != nil {
 		log.Fatalf("la base de datos no respondio a tiempo: %v", err)
@@ -111,8 +112,15 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"status":"error"}`, http.StatusServiceUnavailable)
 		return
 	}
+	commit := os.Getenv("GIT_SHA")
+	if commit == "" {
+		commit = os.Getenv("RENDER_GIT_COMMIT")
+	}
+	if commit == "" {
+		commit = "desconocido"
+	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"ok"}`))
+	w.Write([]byte(`{"status":"ok","commit":"` + commit + `"}`))
 }
 
 func listGastosHandler(w http.ResponseWriter, r *http.Request) {
