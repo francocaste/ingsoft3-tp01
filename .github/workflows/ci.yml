@@ -61,7 +61,7 @@ jobs:
 
       - name: Subir reporte de cobertura (backend)
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: cobertura-backend
           path: TestResults/
@@ -150,7 +150,7 @@ jobs:
 
       - name: Subir reporte de cobertura (frontend)
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: cobertura-frontend
           path: coverage-frontend/reporte/
@@ -276,7 +276,7 @@ jobs:
 
       - name: Publicar reporte de integracion
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report-integracion
           path: frontend/playwright-report
@@ -337,7 +337,7 @@ jobs:
       # El reporte importa MAS cuando falla: por eso !cancelled() y no success().
       - name: Publicar reporte e2e
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report-e2e
           path: frontend/playwright-report
