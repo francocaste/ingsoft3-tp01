@@ -227,6 +227,16 @@ El estado (`terraform.tfstate`) queda en la máquina de quien aplica y no se ver
 adentro. El detalle de las decisiones, los problemas y lo que no se hizo está en la sección TP8 de
 [`decisiones.md`](decisiones.md).
 
+## Seguridad y observabilidad (TP9)
+
+- **Dependabot** (`.github/dependabot.yml`, semanal) vigila `gomod`, `npm` y `github-actions`.
+- **CodeQL** (*default setup*) analiza el código y los workflows; **push protection** está activa.
+- **Sentry** reporta errores y tiempos del backend (`SENTRY_DSN` por variable de entorno) y del front.
+- Un monitor externo sobre el `/health` de PROD se usa para las pruebas y queda **pausado**, para no
+  gastar las horas gratuitas de Render.
+
+Qué se decidió, qué falló y qué no se hizo: sección TP9 de [`decisiones.md`](decisiones.md).
+
 ## Documentación
 
 Las decisiones técnicas, los problemas encontrados y las evidencias de cada trabajo práctico
