@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"gastos-backend/internal/gastos"
@@ -26,8 +27,12 @@ func main() {
 	// Sentry: errores y tiempos de cada pedido. El DSN llega por el entorno; si la
 	// variable no esta (en local, en tests, en QA) la libreria queda apagada y la app anda igual.
 	if err := sentry.Init(sentry.ClientOptions{
-		Dsn:              os.Getenv("SENTRY_DSN"),
-		Release:          os.Getenv("GIT_SHA"),
+		// TrimSpace: una variable pegada con un salto de linea al final apagaba Sentry en silencio.
+		Dsn:     strings.TrimSpace(os.Getenv("SENTRY_DSN")),
+		Release: os.Getenv("GIT_SHA"),
+		// En sentry-go EnableTracing hay que prenderlo ademas de TracesSampleRate: sin el, se
+		// descartan todos los tiempos aunque los errores lleguen.
+		EnableTracing:    true,
 		TracesSampleRate: 1.0, // medir todos los pedidos
 	}); err != nil {
 		log.Printf("sentry.Init: %v", err)
@@ -66,14 +71,6 @@ func main() {
 	mux.HandleFunc("GET /api/resumen", resumenHandler)
 	mux.HandleFunc("GET /api/presupuestos", listPresupuestosHandler)
 	mux.HandleFunc("POST /api/presupuestos", upsertPresupuestoHandler)
-
-	// TEMPORAL (TP9): error de prueba para ver un error llegar a Sentry. Se saca al cerrar el practico.
-	mux.HandleFunc("GET /api/falla", func(w http.ResponseWriter, r *http.Request) {
-		if hub := sentry.GetHubFromContext(r.Context()); hub != nil {
-			hub.CaptureException(errors.New("Falla de prueba del TP9"))
-		}
-		http.Error(w, "falla de prueba", http.StatusInternalServerError)
-	})
 
 	puerto := os.Getenv("PORT")
 	if puerto == "" {
