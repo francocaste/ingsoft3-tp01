@@ -7,6 +7,11 @@ on:
   push:
     branches: [main]
 
+# Minimo privilegio: sin esto, los jobs que no declaran permisos heredan los del repositorio
+# (CodeQL: actions/missing-workflow-permissions). Los de build declaran los suyos aparte.
+permissions:
+  contents: read
+
 jobs:
   build-backend:
     runs-on: ubuntu-latest
