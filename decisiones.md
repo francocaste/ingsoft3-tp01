@@ -3,6 +3,27 @@
 Acá van los enlaces que no se encuentran navegando el repositorio (paquetes publicados, entornos
 vivos y corridas de referencia), agrupados por trabajo práctico. Cada TP agrega su bloque.
 
+### Enlaces del TP9
+
+**Seguridad:** [Code scanning (CodeQL)](https://github.com/francocaste/ingsoft3-tp01/security/code-scanning)
+y [Dependabot](https://github.com/francocaste/ingsoft3-tp01/security/dependabot). PR del bot que mergeé:
+[#57](https://github.com/francocaste/ingsoft3-tp01/pull/57).
+
+**Observabilidad:** PRs [#69](https://github.com/francocaste/ingsoft3-tp01/pull/69) (Sentry en back y front)
+y [#70](https://github.com/francocaste/ingsoft3-tp01/pull/70) (tiempos, permisos mínimos y cierre). Los
+proyectos de Sentry, el monitor de UptimeRobot (pausado) y los *Events* de Render no son públicos: los
+muestro en la defensa.
+
+**Tarjeta nacida de un dato de Sentry:** issue
+[#71](https://github.com/francocaste/ingsoft3-tp01/issues/71) en el
+[tablero del TP3](https://github.com/users/francocaste/projects/2).
+
+**Entornos vivos hasta la defensa:** los mismos del TP7 (tabla del bloque siguiente).
+
+**Release:** [`v9.0.0`](https://github.com/francocaste/ingsoft3-tp01/releases/tag/v9.0.0), sobre el commit
+`b4970975c5b4229ccbdaf3097a3441ba080f8d90`, el que corre en producción (el merge del PR #70 llegó a PROD
+con aprobación).
+
 ### Enlaces del TP7
 
 **Paquetes públicos en el registry** (`docker pull` sin credenciales, etiquetados con el commit del
@@ -1193,3 +1214,122 @@ corrí yo cada comando en mi máquina y en las consolas de Neon y Render, leí c
 cuando lo esperaba), verifiqué con `curl` que la api y el front de preprod responden, y provoqué y
 reparé el drift a mano. Puedo leer un plan en voz alta y explicar qué hace cada acción sin el texto
 generado, y crear y destruir preprod frente al docente.
+
+## TP9 — DevSecOps, observabilidad y feedback continuo
+
+### 1. Seguridad en el repositorio (shift-left)
+
+- **Dependabot.** `.github/dependabot.yml` vigila los tres ecosistemas de mi repo, con frecuencia
+  semanal: `gomod` en `/backend`, `npm` en `/frontend` y `github-actions` en `/`. Además activé en
+  *Settings* las alertas de Dependabot y las *security updates*. Al activarlo el bot abrió unos diez
+  PRs de golpe.
+- **El PR que mergeé: [#57](https://github.com/francocaste/ingsoft3-tp01/pull/57)**, `github.com/lib/pq`
+  de 1.10.9 a 1.12.3 en `/backend`. Es el driver con el que el backend habla con Postgres. Lo elegí
+  porque es un salto *minor* (no cambia la API según semver), toca una sola dependencia y, sobre todo,
+  la cadena de mi pipeline lo ejercita de verdad: la suite de integración y la e2e corren contra la base
+  de Neon, así que si el driver rompía algo iba a fallar antes de llegar a PROD. El *compatibility score*
+  del bot era de 57 %: no es una garantía, por eso confié en el gate y no en el número. Pasó la cadena
+  completa en verde, aprobé el deploy a PROD y `/health` informó el commit del merge (`8bdd960`).
+- **Los que no mergeé.** `vite` 5→8 (#60), `@vitejs/plugin-react` 4→6 (#63), `react` 18→19 (#64) y
+  `vitest` 3→5 (#65) son saltos de versión mayor y su CI falló: pedirían una migración de la app, no un
+  bump. Las actualizaciones de las *actions* (6→7) y el resto de los PRs quedaron abiertos sin
+  mergear en este TP: prefiero revisarlos de a uno antes que aceptar diez cambios a la vez.
+- **CodeQL (configuración por defecto).** Activé el *default setup* y el primer análisis apareció en la
+  pestaña *Security → Code scanning*. Marcó **4 alertas de la misma regla**, `missing-workflow-permissions`,
+  en cuatro jobs de `ci.yml` (las líneas 174, 222, 283 y 343). Las analicé: son verdaderas. Un job sin
+  bloque `permissions` hereda los permisos por defecto del repositorio para el `GITHUB_TOKEN`, que pueden
+  ser más amplios de lo que el job necesita (principio de mínimo privilegio; en OWASP cae en *Security
+  Misconfiguration*). Ninguno de esos jobs necesita escribir en el repo. Lo arreglé en el PR
+  [#70](https://github.com/francocaste/ingsoft3-tp01/pull/70) con un `permissions: contents: read` a nivel
+  de workflow; los jobs de *build*, que publican en el registry, siguen declarando su propio
+  `permissions` con `packages: write`. Después del merge,
+  `gh api "repos/francocaste/ingsoft3-tp01/code-scanning/alerts?state=open" --jq 'length'` devuelve `0`.
+- **Push protection.** Está activa (*Settings → Advanced Security* y el campo
+  `secret_scanning_push_protection` de la API del repositorio). Sólo verifiqué la configuración: no
+  intenté pushear un token de prueba, así que no tengo evidencia del bloqueo en acción.
+
+### 2. Monitoreo externo
+
+Puse un monitor de UptimeRobot sobre el `/health` de **PROD**. Para provocar la caída suspendí el web
+service de la API en Render y medí:
+
+| Hora | Evento |
+|---|---|
+| 19:55 | suspendí el servicio de la API de PROD |
+| 20:00 | llegó el mail de *DOWN*: **la caída se detectó a los ~5 minutos** |
+| 20:01 | lo reanudé (*Resume*) |
+| 20:05 | llegó la alerta de *UP* (el `/health` ya respondía) |
+
+El historial con el *DOWN* y el *UP* queda en el monitor. **Lo dejé pausado**: un chequeo cada pocos
+minutos mantiene despierto el servicio gratuito de Render y consume las 750 horas del mes que comparten
+todos mis servicios (ya son seis con preprod). Lo reactivo sólo para la defensa y lo vuelvo a pausar.
+
+### 3. Observabilidad con Sentry
+
+- **Dos proyectos, `gastos-api` (Go) y `gastos-front` (React),** instalados por el PR
+  [#69](https://github.com/francocaste/ingsoft3-tp01/pull/69) y ajustados por el
+  [#70](https://github.com/francocaste/ingsoft3-tp01/pull/70). El backend usa `sentry-go` **fijado en
+  v0.35.0**: la v0.36 pide Go 1.23 y mi `go.mod` está en 1.22. El DSN del backend entra por la variable
+  `SENTRY_DSN` de Render (no está en el código); el del front sí está en `main.jsx`, porque un DSN de
+  navegador es público por diseño. El `release` del backend es el `GIT_SHA` de la imagen, así que cada
+  evento dice de qué commit viene. `tracesSampleRate` está en 1.0: con tan pocos pedidos no hay nada que
+  muestrear; con tráfico real lo bajaría.
+- **El error.** Para tener algo que ver agregué una ruta temporal, `GET /api/falla`, que produce un
+  error a propósito, y tiré un `throw` desde la consola del navegador en el front. En Sentry quedaron
+  **`GASTOS-API-1` «Falla de prueba del TP9»** (6 eventos) y **`GASTOS-FRONT-1` «Falla de prueba del
+  front TP9»** (1 evento, no manejado). La ruta `/api/falla` **se sacó** en el PR #70, para no dejar un
+  botón de rotura en PROD.
+- **Uso (*Dashboards → Backend Overview → Transactions*).** Con unos pedidos propios más un bucle que
+  yo mismo corrí a propósito (30 a `/api/gastos`, 10 a `/api/resumen`, 5 a `/api/presupuestos`), la
+  tabla dio:
+  - **Operación más lenta: `GET /api/resumen`**, con P95 ≈ 111 ms contra un P50 ≈ 10 ms y la que más
+    *Time Spent* acumula (223 ms).
+  - **Operación más usada: `GET /api/gastos`**, la única con un TPM visible (0.0146/min).
+  - Con tan pocos pedidos el P95 es casi el pedido más lento visto y se mueve entre mediciones
+    (pasó de 116 ms a 111 ms al agregar muestras), y pudo incluir un arranque en frío. El «más usada»
+    **salió del tráfico que generé yo**, no de uso orgánico: lo declaro para no presentarlo como uso real.
+  - `GET /`, `HEAD /` y `GET /api/falla` figuran con *failure rate* 1: la raíz de la API no tiene ruta
+    (supongo que un 404, porque Sentry cuenta los 4xx como falla; no lo verifiqué).
+- **La tarjeta.** Con el dato de la operación más lenta abrí el issue
+  [#71](https://github.com/francocaste/ingsoft3-tp01/issues/71) «Investigar latencia de `GET /api/resumen`
+  (P95 ~111 ms en Sentry)» y lo agregué al
+  [tablero del TP3](https://github.com/users/francocaste/projects/2), en `Todo`. La tarjeta no dice
+  cómo arreglarlo: dice qué medí, qué no sé (si el costo es de la consulta o del arranque en frío) y que
+  hay que volver a medir.
+
+### 4. Problemas encontrados y cómo los resolví
+
+- **Dependabot en la carpeta equivocada.** Creé el `dependabot.yml` dentro de `infra/.github` porque mi
+  terminal estaba en `infra\`. Lo moví a `.github\` antes de commitear y agregué sólo los archivos
+  correspondientes (nunca un `git add .`).
+- **El navegador bloqueaba a Sentry.** Los eventos del front no llegaban: Brave (con *Shields*) cortaba
+  los pedidos (`ERR_BLOCKED_BY_CLIENT`). Desactivé el bloqueo y el error llegó. En un usuario real con
+  un bloqueador, el front quedaría ciego: es una limitación de Sentry en el navegador.
+- **El DSN del backend tenía un salto de línea al final.** Los errores del backend no aparecían y el
+  log de Render decía `DsnParseError`: al pegar la variable se coló un `\n` y el SDK queda desactivado
+  sin romper la app. Corregí la variable y agregué `strings.TrimSpace` al leerla.
+- **Las transacciones del backend no llegaban.** `TracesSampleRate` solo no alcanza en `sentry-go`
+  v0.35.0: hace falta además `EnableTracing: true`. Lo verifiqué leyendo el código de la librería y lo
+  agregué en el PR #70; después el *Backend Overview* mostró datos.
+- **Un *Save and deploy* que dio 404.** Al editar la variable en Render y guardar con *Save and deploy*,
+  `/api/falla` respondió 404 y después se normalizó. No confirmé la causa. Sí aprendí un riesgo de
+  fondo: ese botón despliega la imagen que figura en los *Settings* del servicio, que puede no ser la
+  del último deploy del pipeline; por eso lo usé sólo para cambiar variables y después verifiqué el
+  commit en `/health`.
+- **CodeQL.** Las cuatro alertas de permisos del `ci.yml` (sección 1).
+
+### 5. Qué no hice
+
+No probé el *push protection* con un token de prueba ni analicé un segundo tipo de alerta de CodeQL (las
+cuatro eran la misma regla). No calculé las métricas DORA ni escribí un *postmortem* de la caída de PROD
+que provoqué, aunque tengo los horarios para hacerlo. Los demás PRs de Dependabot siguen abiertos.
+
+### 6. Declaración de uso de IA
+
+Usé IA (Claude) para el TP9, paso a paso. Me escribió el `dependabot.yml`, la integración de Sentry en
+Go y en React (y los arreglos de `EnableTracing`, `TrimSpace` y los permisos del `ci.yml`), me explicó
+cada pantalla de Sentry, UptimeRobot y GitHub y me ayudó a leer los errores. No me limité a copiar:
+mergeé cada PR sólo después de ver la cadena completa en verde, aprobé yo el deploy a PROD, verifiqué el
+commit con `/health`, suspendí el servicio y anoté los horarios de la caída, pausé el monitor, generé el
+error y el tráfico, leí la tabla de *Transactions* y creé el issue #71 desde el dato. Puedo mostrar en
+vivo la pestaña *Security*, el PR de Dependabot, el historial del monitor y los datos de Sentry.
